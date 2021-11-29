@@ -1,10 +1,10 @@
-# Copyright 2021 The Magenta Authors.
+# Copyright 2016 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,9 +21,10 @@ from __future__ import print_function
 import os
 import random
 
-from magenta.contrib import training as contrib_training
 import numpy as np
-import tensorflow.compat.v1 as tf
+from six.moves import range  # pylint: disable=redefined-builtin
+import tensorflow as tf
+
 
 LSTM_STATE_NAME = 'lstm'
 
@@ -78,46 +79,45 @@ LEAP_DOUBLED = -1
 
 def default_hparams():
   """Generates the hparams used to train note rnn used in paper."""
-  return contrib_training.HParams(
-      use_dynamic_rnn=True,
-      batch_size=BATCH_SIZE,
-      lr=0.0002,
-      l2_reg=2.5e-5,
-      clip_norm=5,
-      initial_learning_rate=0.5,
-      decay_steps=1000,
-      decay_rate=0.85,
-      rnn_layer_sizes=[100],
-      skip_first_n_losses=32,
-      one_hot_length=NUM_CLASSES,
-      exponentially_decay_learning_rate=True)
+  return tf.contrib.training.HParams(use_dynamic_rnn=True,
+                                     batch_size=BATCH_SIZE,
+                                     lr=0.0002,
+                                     l2_reg=2.5e-5,
+                                     clip_norm=5,
+                                     initial_learning_rate=0.5,
+                                     decay_steps=1000,
+                                     decay_rate=0.85,
+                                     rnn_layer_sizes=[100],
+                                     skip_first_n_losses=32,
+                                     one_hot_length=NUM_CLASSES,
+                                     exponentially_decay_learning_rate=True)
 
 
 def basic_rnn_hparams():
   """Generates the hparams used to train a basic_rnn.
 
   These are the hparams used in the .mag file found at
-  https://github.com/magenta/magenta/tree/main/magenta/models/
+  https://github.com/tensorflow/magenta/tree/master/magenta/models/
   melody_rnn#pre-trained
 
   Returns:
     Hyperparameters of the downloadable basic_rnn pre-trained model.
   """
   # TODO(natashajaques): ability to restore basic_rnn from any .mag file.
-  return contrib_training.HParams(
-      batch_size=128, rnn_layer_sizes=[512, 512], one_hot_length=NUM_CLASSES)
+  return tf.contrib.training.HParams(batch_size=128,
+                                     rnn_layer_sizes=[512, 512],
+                                     one_hot_length=NUM_CLASSES)
 
 
 def default_dqn_hparams():
   """Generates the default hparams for RLTuner DQN model."""
-  return contrib_training.HParams(
-      random_action_probability=0.1,
-      store_every_nth=1,
-      train_every_nth=5,
-      minibatch_size=32,
-      discount_rate=0.95,
-      max_experience=100000,
-      target_network_update_rate=0.01)
+  return tf.contrib.training.HParams(random_action_probability=0.1,
+                                     store_every_nth=1,
+                                     train_every_nth=5,
+                                     minibatch_size=32,
+                                     discount_rate=0.95,
+                                     max_experience=100000,
+                                     target_network_update_rate=0.01)
 
 
 def autocorrelate(signal, lag=1):
@@ -201,12 +201,8 @@ def decoder(event_list, transpose_amount):
   Returns:
     Integer list of MIDI values.
   """
-  def _decode_event(e):
-    if e < NUM_SPECIAL_EVENTS:
-      return e - NUM_SPECIAL_EVENTS
-    else:
-      return e + INITIAL_MIDI_VALUE - transpose_amount
-  return [_decode_event(e) for e in event_list]
+  return [e - NUM_SPECIAL_EVENTS if e < NUM_SPECIAL_EVENTS else
+          e + INITIAL_MIDI_VALUE - transpose_amount for e in event_list]
 
 
 def make_onehot(int_list, one_hot_length):
@@ -254,6 +250,26 @@ def trim_variable_postfixes(scope_str):
   idx = scope_str.find(':')
   return scope_str[:idx]
 
+def replace_changed_vars(scope_str):
+   """
+   Replaces names for layers in basic_rnn graph with original names in checkpoint.
+   Necessary to align variables in graph and checkpoint
+
+   Args:
+     scope_str: Tensorflow variable scope string.
+   Returns:
+     Scope string with original names for layers.
+   """
+   replace_dict = {"rnn/multi_rnn_cell/":"RNN/MultiRNNCell/",
+                  "/cell_0/":"/Cell0/",
+                  "/lstm_cell/bias":"/LSTMCell/B",
+                  "/lstm_cell/kernel":"/LSTMCell/W_0",
+                  #"":"",
+                  }
+
+   for k, v in replace_dict.items():
+     scope_str = scope_str.replace(k,v)
+   return scope_str
 
 def get_variable_names(graph, scope):
   """Finds all the variable names in a graph that begin with a given scope.
@@ -303,14 +319,14 @@ def make_rnn_cell(rnn_layer_sizes, state_is_tuple=False):
         and cell matrix as a state instead of a concatenated matrix.
 
   Returns:
-      A tf.rnn.rnn_cell.MultiRNNCell based on the given hyperparameters.
+      A tf.contrib.rnn.MultiRNNCell based on the given hyperparameters.
   """
   cells = []
   for num_units in rnn_layer_sizes:
-    cell = tf.nn.rnn_cell.LSTMCell(num_units, state_is_tuple=state_is_tuple)
+    cell = tf.contrib.rnn.LSTMCell(num_units, state_is_tuple=state_is_tuple)
     cells.append(cell)
 
-  cell = tf.nn.rnn_cell.MultiRNNCell(cells, state_is_tuple=state_is_tuple)
+  cell = tf.contrib.rnn.MultiRNNCell(cells, state_is_tuple=state_is_tuple)
 
   return cell
 
