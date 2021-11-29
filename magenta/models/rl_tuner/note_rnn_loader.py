@@ -1,10 +1,10 @@
-# Copyright 2021 The Magenta Authors.
+# Copyright 2016 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#    http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,16 +33,16 @@ These functions are necessary for use with the RL Tuner class.
 
 import os
 
+import numpy as np
+import tensorflow as tf
+
+import magenta
 from magenta.common import sequence_example_lib
 from magenta.models.rl_tuner import rl_tuner_ops
 from magenta.models.shared import events_rnn_graph
-from magenta.pipelines import melody_pipelines
-import note_seq
-from note_seq import midi_io
-from note_seq import sequences_lib
-import numpy as np
-import tensorflow.compat.v1 as tf
-import tf_slim
+from magenta.music import melodies_lib
+from magenta.music import midi_io
+from magenta.music import sequences_lib
 
 
 class NoteRNNLoader(object):
@@ -160,15 +160,20 @@ class NoteRNNLoader(object):
     """
     var_dict = dict()
     for var in self.variables():
-      inner_name = rl_tuner_ops.get_inner_scope(var.name)
-      inner_name = rl_tuner_ops.trim_variable_postfixes(inner_name)
+      # inner_name = rl_tuner_ops.get_inner_scope(var.name)
+      # inner_name = rl_tuner_ops.trim_variable_postfixes(inner_name)
+      checkpoint_var_name = rl_tuner_ops.get_inner_scope(var.name)
+      checkpoint_var_name = rl_tuner_ops.trim_variable_postfixes(checkpoint_var_name)
+      checkpoint_var_name = rl_tuner_ops.replace_changed_vars(checkpoint_var_name)
       if '/Adam' in var.name:
         # TODO(lukaszkaiser): investigate the problem here and remove this hack.
         pass
       elif self.note_rnn_type == 'basic_rnn':
-        var_dict[inner_name] = var
+        # var_dict[inner_name] = var
+        var_dict[checkpoint_var_name] = var
       else:
-        var_dict[self.checkpoint_scope + '/' + inner_name] = var
+        # var_dict[self.checkpoint_scope + '/' + inner_name] = var
+        var_dict[self.checkpoint_scope + '/' + checkpoint_var_name] = var
 
     return var_dict
 
@@ -234,10 +239,9 @@ class NoteRNNLoader(object):
 
             outputs_flat = tf.reshape(outputs,
                                       [-1, self.hparams.rnn_layer_sizes[-1]])
-            if self.note_rnn_type == 'basic_rnn':
-              linear_layer = tf_slim.layers.linear
-            else:
-              linear_layer = tf_slim.layers.legacy_linear
+            linear_layer = (tf.contrib.layers.linear
+                            if self.note_rnn_type == 'basic_rnn'
+                            else tf.contrib.layers.legacy_linear)
             logits_flat = linear_layer(
                 outputs_flat, self.hparams.one_hot_length)
             return logits_flat, final_state
@@ -295,8 +299,9 @@ class NoteRNNLoader(object):
     self.primer_sequence = midi_io.midi_file_to_sequence_proto(self.midi_primer)
     quantized_seq = sequences_lib.quantize_note_sequence(
         self.primer_sequence, steps_per_quarter=4)
-    extracted_melodies, _ = melody_pipelines.extract_melodies(
-        quantized_seq, min_bars=0, min_unique_pitches=1)
+    extracted_melodies, _ = melodies_lib.extract_melodies(quantized_seq,
+                                                          min_bars=0,
+                                                          min_unique_pitches=1)
     self.primer = extracted_melodies[0]
     self.steps_per_bar = self.primer.steps_per_bar
 
@@ -306,11 +311,14 @@ class NoteRNNLoader(object):
       tf.logging.debug('Priming the model with MIDI file %s', self.midi_primer)
 
       # Convert primer Melody to model inputs.
-      encoder = note_seq.OneHotEventSequenceEncoderDecoder(
-          note_seq.MelodyOneHotEncoding(
-              min_note=rl_tuner_ops.MIN_NOTE, max_note=rl_tuner_ops.MAX_NOTE))
+      encoder = magenta.music.OneHotEventSequenceEncoderDecoder(
+          magenta.music.MelodyOneHotEncoding(
+              min_note=rl_tuner_ops.MIN_NOTE,
+              max_note=rl_tuner_ops.MAX_NOTE))
 
-      primer_input, _ = encoder.encode(self.primer)
+      seq = encoder.encode(self.primer)
+      features = seq.feature_lists.feature_list['inputs'].feature
+      primer_input = [list(i.float_list.value) for i in features]
 
       # Run model over primer sequence.
       primer_input_batch = np.tile([primer_input], (self.batch_size, 1, 1))
